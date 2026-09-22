@@ -35,6 +35,7 @@ from .const import (
     TSP_APP_SECRET,
     TSP_BASE_URL,
     TSP_CHANNEL_ID,
+    TSP_COMMAND_ACCEPTED_CODE,
     TSP_SUCCESS_CODE,
 )
 
@@ -462,13 +463,14 @@ class CheryTspClient:
                 raise TspError(None, f"Non-JSON response from {path}: {text[:300]}") from err
 
             code = str(payload.get("code", ""))
-            if code != TSP_SUCCESS_CODE:
+            if code not in (TSP_SUCCESS_CODE, TSP_COMMAND_ACCEPTED_CODE):
                 # one relogin+retry for auth-looking errors
                 if not _retried and self._relogin_handler is not None:
                     _LOGGER.debug("TSP non-success code %s on %s — retrying after re-login", code, path)
                     await self._relogin_handler()
                     return await self._post(path, body, _retried=True)
                 raise TspError(code, f"{path}: {text[:300]}")
+            # NB: A00079 = asynchronous command ACCEPTED/queued (not an error)
             return payload
 
     async def realtime(self) -> dict[str, Any]:
