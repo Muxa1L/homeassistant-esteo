@@ -126,6 +126,7 @@ MENU = """\
   [12] Open trunk
   [13] Location sharing ON
   [14] Location sharing OFF
+  [ l] Query location sharing state
   [ r] Raw request (custom path + extra JSON — for calibration)
   [ p] Refresh taskId (re-check control PIN)
   [ s] Poll realtime state
@@ -147,7 +148,7 @@ def _print_tsp_response(payload) -> None:
             print(f">> code {code} — NOT a known success code, needs investigation")
 
 
-async def _ensure_task_id(esteo, tsp, vin: str, pin: str) -> bool:
+async def _ensure_task_id(esteo, tsp, vin: str, pin: str, t_user_id=None) -> bool:
     """Check the control PIN → taskId. Tries Esteo backend, falls back to TSP.
 
     Prints raw responses of both endpoints so their shapes can be verified.
@@ -155,7 +156,8 @@ async def _ensure_task_id(esteo, tsp, vin: str, pin: str) -> bool:
     hr("CONTROL PIN CHECK → taskId")
     if esteo is not None:
         try:
-            hr("Esteo backend: POST /telematics/v1/chery/vehicle/check-password")
+            hr("Esteo backend: POST /telematics/v1/chery/vehicle/check-password "
+               "{password, vin, scene: 0, type: 0}")
             result = await esteo.check_control_password(vin, pin)
             print(json.dumps(result, indent=2, ensure_ascii=False)[:1000])
             task_id = result.get("taskId")
@@ -167,8 +169,9 @@ async def _ensure_task_id(esteo, tsp, vin: str, pin: str) -> bool:
         except Exception as err:  # noqa: BLE001
             print(f">> backend check-password failed: {type(err).__name__}: {err}")
     try:
-        hr("TSP side: POST /asc/vehicleControl/check-password")
-        result = await tsp.check_password(pin)
+        hr("TSP side: POST /asc/controlPasswordManage/checkPassword "
+           "{vin, tUserId, channelId, password, scene, type}")
+        result = await tsp.check_password(pin, t_user_id=t_user_id)
         print(json.dumps(result, indent=2, ensure_ascii=False)[:1000])
         task_id = result.get("taskId")
         if task_id:
@@ -212,7 +215,8 @@ async def _raw_request(tsp) -> None:
     await _run_command(f"POST {path} extra={extra!r}", tsp.send_command(path, extra))
 
 
-async def command_menu(esteo, tsp, vin: str, pin_arg: str | None) -> None:
+async def command_menu(esteo, tsp, vin: str, pin_arg: str | None,
+                        t_user_id=None) -> None:
     """Interactive remote-control test menu (Phase 2 live verification)."""
     print("\n" + "!" * 60)
     print("WARNING: these commands ACT ON THE REAL VEHICLE.")
@@ -222,7 +226,7 @@ async def command_menu(esteo, tsp, vin: str, pin_arg: str | None) -> None:
         print("No PIN — commands need a taskId; aborting menu.")
         return
 
-    while not await _ensure_task_id(esteo, tsp, vin, pin):
+    while not await _ensure_task_id(esteo, tsp, vin, pin, t_user_id):
         retry = input(
             "\nNo taskId obtained — commands cannot be authorized.\n"
             "Re-enter PIN (or press Enter to quit menu)> "
@@ -246,7 +250,7 @@ async def command_menu(esteo, tsp, vin: str, pin_arg: str | None) -> None:
                     print("Empty state body — car may be asleep; try again.")
                 continue
             if choice == "p":
-                while not await _ensure_task_id(esteo, tsp, vin, pin):
+                while not await _ensure_task_id(esteo, tsp, vin, pin, t_user_id):
                     retry = input("Re-enter PIN (Enter to quit menu)> ").strip()
                     if not retry:
                         return
@@ -254,6 +258,18 @@ async def command_menu(esteo, tsp, vin: str, pin_arg: str | None) -> None:
                 continue
             if choice == "r":
                 await _raw_request(tsp)
+                continue
+            if choice == "l":
+                hr("Query location sharing (POST /act/vehicleLocation/querySwitch)")
+                try:
+                    result = await tsp.query_location_sharing()
+                    print(json.dumps(result, indent=2, ensure_ascii=False))
+                    sw = result.get("locationSwitch") if isinstance(result, dict) else None
+                    if sw is not None:
+                        print(f">> locationSwitch={sw} "
+                              f"({'sharing DISABLED' if str(sw) == '1' else 'sharing ENABLED'})")
+                except Exception as err:  # noqa: BLE001
+                    print(f"QUERY FAILED: {type(err).__name__}: {err}")
                 continue
             if choice == "1":
                 await _run_command("Lock doors", tsp.lock_doors())
@@ -351,6 +367,13 @@ async def run(args: argparse.Namespace) -> int:
         if not user_token:
             print("No userToken returned — cannot continue.")
             return 1
+        account_id = creds.get("accountId")
+        t_user_id = None
+        if account_id is not None:
+            try:
+                t_user_id = int(account_id)
+            except (TypeError, ValueError):
+                t_user_id = None
 
         vin = args.vin
         if not vin:
@@ -391,7 +414,7 @@ async def run(args: argparse.Namespace) -> int:
         await poll_once()
 
         if args.commands:
-            await command_menu(esteo, tsp, vin, args.pin)
+            await command_menu(esteo, tsp, vin, args.pin, t_user_id=t_user_id)
 
         if args.loop:
             print("\nPolling every 60 s — Ctrl+C to stop.")

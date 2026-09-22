@@ -47,7 +47,10 @@ async def async_setup_entry(
             coordinator, "location_sharing", "Location sharing",
             lambda c: c._tsp.set_location_sharing(True),
             lambda c: c._tsp.set_location_sharing(False),
-            value_getter=lambda s: s.gps.valid if s.gps else None,
+            value_getter=lambda s: (
+                None if s.location_sharing_disabled is None
+                else not s.location_sharing_disabled
+            ),
             icon_on="mdi:map-marker", icon_off="mdi:map-marker-off",
         ),
     ])

@@ -120,7 +120,13 @@ class EsteoCoordinator(DataUpdateCoordinator[VehicleState]):
         if self._esteo is not None:
             result = await self._esteo.check_control_password(self.vin, pin)
         else:
-            result = await self._tsp.check_password(pin)
+            t_user_id = None
+            if self.account_id:
+                try:
+                    t_user_id = int(self.account_id)
+                except (TypeError, ValueError):
+                    t_user_id = None
+            result = await self._tsp.check_password(pin, t_user_id=t_user_id)
         task_id = result.get("taskId")
         if not task_id:
             raise TspError(None, f"Control PIN check returned no taskId: {result!r:.200}")
@@ -231,7 +237,16 @@ class EsteoCoordinator(DataUpdateCoordinator[VehicleState]):
             raw = await self._tsp.realtime()
             if not raw:
                 raise UpdateFailed("TSP returned an empty state body")
-            return VehicleState.from_data_pool(raw)
+            state = VehicleState.from_data_pool(raw)
+            # Best-effort: also query the location-sharing switch state
+            try:
+                loc = await self._tsp.query_location_sharing()
+                switch = loc.get("locationSwitch")
+                if switch is not None:
+                    state.location_sharing_disabled = str(switch) == "1"
+            except Exception:  # noqa: BLE001
+                _LOGGER.debug("Location switch query failed (ignored)")
+            return state
         except EsteoReauthRequired as err:
             # Stored credentials missing/rejected → HA shows the re-auth flow
             if self.config_entry is not None:

@@ -111,6 +111,9 @@ class VehicleState:
     operating_condition: str | None = None
     sentinel_mode: str | None = None
 
+    # --- location sharing (from /act/vehicleLocation/querySwitch, NOT the data pool) ---
+    location_sharing_disabled: bool | None = None  # True = privacy mode ON
+
     @property
     def anti_theft(self) -> bool | None:
         """antiThftState ('1' = armed/locked — polarity assumption)."""
