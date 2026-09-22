@@ -13,7 +13,8 @@
         "description": "Enter your Esteo account credentials (the same phone number and password you use in the Esteo mobile app). Phone format: {phone_hint}",
         "data": {
           "phone": "Phone number",
-          "password": "Password"
+          "password": "Password",
+          "control_pin": "Control PIN (optional, for remote commands)"
         }
       },
       "select_vehicle": {
@@ -50,6 +51,7 @@
         "title": "Esteo options",
         "data": {
           "scan_interval": "Polling interval (seconds)",
+          "control_pin": "Control PIN (for remote commands)",
           "user_token": "New TSP user token (direct mode)"
         }
       }

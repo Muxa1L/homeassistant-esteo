@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from datetime import timedelta
 from typing import Any
 
@@ -22,6 +23,7 @@ from .const import (
     AUTH_METHOD_OAUTH,
     CONF_ACCESS_TOKEN,
     CONF_ACCOUNT_ID,
+    CONF_CONTROL_PIN,
     CONF_EXPIRES_AT,
     CONF_REFRESH_TOKEN,
     CONF_USER_TOKEN,
@@ -74,6 +76,7 @@ class EsteoCoordinator(DataUpdateCoordinator[VehicleState]):
             token_provider=lambda: self._entry_data.get(CONF_USER_TOKEN, ""),
             relogin_handler=self._relogin_tsp,
         )
+        self._task_id_ts: float = 0.0
 
         super().__init__(
             hass,
@@ -87,6 +90,45 @@ class EsteoCoordinator(DataUpdateCoordinator[VehicleState]):
     # ------------------------------------------------------------------
     # credential handling
     # ------------------------------------------------------------------
+    @property
+    def has_control_pin(self) -> bool:
+        """Whether a control PIN is configured."""
+        return bool(self._entry_data.get(CONF_CONTROL_PIN))
+
+    async def ensure_task_id(self) -> None:
+        """Ensure a valid taskId (from PIN check) for command authorization."""
+        if not self.has_control_pin:
+            raise TspError(None, "No control PIN configured — add it in integration options")
+        if self._tsp._task_id and (time.time() - self._task_id_ts) < 3600:
+            return  # taskId still fresh (< 1 hour)
+        pin = self._entry_data[CONF_CONTROL_PIN]
+        # OAuth mode: use the Esteo backend endpoint; direct mode: use the TSP endpoint
+        if self._esteo is not None:
+            result = await self._esteo.check_control_password(self.vin, pin)
+        else:
+            result = await self._tsp.check_password(pin)
+        task_id = result.get("taskId")
+        if not task_id:
+            raise TspError(None, f"Control PIN check returned no taskId: {result!r:.200}")
+        self._tsp.set_task_id(task_id)
+        self._task_id_ts = time.time()
+        _LOGGER.debug("TaskId obtained for %s", self.vin)
+
+    async def execute_command(self, coro) -> Any:
+        """Execute a TSP command, ensuring taskId is valid first."""
+        await self.ensure_tsp_credentials()
+        await self.ensure_task_id()
+        try:
+            return await coro
+        except TspError as err:
+            # taskId might have expired — retry once
+            if err.code and str(err.code) != TSP_SUCCESS_CODE:
+                _LOGGER.debug("Command failed (%s) — refreshing taskId and retrying", err.code)
+                self._tsp._task_id = None
+                await self.ensure_task_id()
+                return await coro
+            raise
+
     def _store_oauth_tokens(self, tokens: dict[str, Any]) -> None:
         """Persist refreshed OAuth tokens into the config entry data."""
         self._entry_data.update(

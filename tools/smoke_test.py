@@ -153,7 +153,7 @@ SAMPLE = {
     "time": "2025-08-29 10:00:00",
     "engineState": "1",
     "onlineStatus": "1",
-    "doorLock": "1",
+    "doorLock": "0",
     "frontLeftDoor": "0",
     "hood": "0",
     "trunkDoor": "1",
@@ -167,6 +167,10 @@ SAMPLE = {
     "rFrontTyreKpa": "232",
     "lRearTyreKpa": "228",
     "rRearTyreKpa": "229",
+    "lFrontTyreTemp": "28",
+    "rFrontTyreTemp": "29",
+    "lRearTyreTemp": "27",
+    "rRearTyreTemp": "27.5",
     "lat": "55.7522",
     "lon": "37.6156",
     "validFlag": "1",
@@ -196,6 +200,10 @@ check("doors locked", state.doors_locked is True)
 check("door closed", state.door_fl_open is False)
 check("trunk open", state.trunk_open is True)
 check("tire fl", state.tire_pressure_fl == 230.0)
+check("tire temp fl", state.tire_temp_fl == 28.0)
+check("tire temp fr", state.tire_temp_fr == 29.0)
+check("tire temp rl", state.tire_temp_rl == 27.0)
+check("tire temp rr", state.tire_temp_rr == 27.5)
 check("gps lat", state.gps.latitude == 55.7522)
 check("gps valid", state.gps.valid is True)
 check("unknown field kept in raw", state.raw.get("unknownFutureField") == "zzz")
@@ -207,5 +215,29 @@ check("empty pool range None", empty.range is None)
 
 weird = models.VehicleState.from_data_pool({"dumpEnergy": "", "engineState": None})
 check("empty string → None", weird.soc is None and weird.engine_on is None)
+
+# ================================================================ Phase 2: command methods
+tsp = api.CheryTspClient(session=None, vin="TESTVIN", token_provider=lambda: "tok")
+tsp.set_task_id("TASK123")
+base = tsp._cmd_base()
+check("cmd base has vin", base["vin"] == "TESTVIN")
+check("cmd base has taskId", base["taskId"] == "TASK123")
+check("cmd base has seq", base.get("seq") is not None)
+
+# command methods should be callable coroutines (inspect __name__)
+import inspect as _inspect
+for name, fn in [
+    ("lock_doors", tsp.lock_doors),
+    ("unlock_doors", tsp.unlock_doors),
+    ("start_engine", tsp.start_engine),
+    ("stop_engine", tsp.stop_engine),
+    ("find_car", tsp.find_car),
+    ("open_trunk", tsp.open_trunk),
+    ("control_climate", tsp.control_climate),
+    ("control_windshield_defrost", tsp.control_windshield_defrost),
+    ("control_rear_defrost", tsp.control_rear_defrost),
+    ("set_location_sharing", tsp.set_location_sharing),
+]:
+    check(f"{name} is coroutine fn", _inspect.iscoroutinefunction(fn))
 
 print(f"\nAll {PASSED} checks passed.")

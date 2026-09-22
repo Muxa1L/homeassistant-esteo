@@ -81,6 +81,12 @@ class VehicleState:
     tire_pressure_rr: float | None = None
     tire_pressure_unit: str | None = None
 
+    # --- tire temperatures (°C) ---
+    tire_temp_fl: float | None = None
+    tire_temp_fr: float | None = None
+    tire_temp_rl: float | None = None
+    tire_temp_rr: float | None = None
+
     # --- flags (polarity assumptions documented in const.py) ---
     engine_on: bool | None = None
     online: bool | None = None
@@ -143,6 +149,11 @@ class VehicleState:
         state.tire_pressure_rl = _num(raw, "lRearTyreKpa")
         state.tire_pressure_rr = _num(raw, "rRearTyreKpa")
         state.tire_pressure_unit = _str(raw, "tirePressureUnit")
+
+        state.tire_temp_fl = _num(raw, "lFrontTyreTemp")
+        state.tire_temp_fr = _num(raw, "rFrontTyreTemp")
+        state.tire_temp_rl = _num(raw, "lRearTyreTemp")
+        state.tire_temp_rr = _num(raw, "rRearTyreTemp")
 
         state.engine_on = _flag(raw, "engineState")
         state.online = _flag(raw, "onlineStatus")

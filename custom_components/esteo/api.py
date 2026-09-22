@@ -310,6 +310,18 @@ class EsteoClient:
         except EsteoApiError:
             _LOGGER.debug("TSP logout failed (ignored)")
 
+    async def check_control_password(self, vin: str, pin: str) -> dict[str, Any]:
+        """Verify the control PIN → returns {'taskId': ...} for command auth."""
+        data = await self._request(
+            "POST", "/telematics/v1/chery/vehicle/check-password",
+            json_body={"vin": vin, "password": pin},
+        )
+        if isinstance(data, dict) and "taskId" not in data:
+            for key in ("data", "body"):
+                if isinstance(data.get(key), dict):
+                    return data[key]
+        return data or {}
+
 # ---------------------------------------------------------------------------
 # Chery TSP — request signing (API_REFERENCE.md §8)
 # ---------------------------------------------------------------------------
@@ -393,6 +405,7 @@ class CheryTspClient:
         self._vin = vin
         self._token_provider = token_provider
         self._relogin_handler = relogin_handler
+        self._task_id: str | None = None
 
     async def _post(
         self, path: str, body: dict[str, Any], _retried: bool = False
@@ -453,6 +466,100 @@ class CheryTspClient:
             {"vin": self._vin, "clientType": "1", "seq": str(int(time.time() * 1000))},
         )
         return str(payload.get("code")) == TSP_SUCCESS_CODE
+
+    # ------------------------------------------------------------------
+    # Remote control commands (Phase 2)
+    # ------------------------------------------------------------------
+    def _cmd_base(self) -> dict[str, Any]:
+        """Base fields for every command request."""
+        return {
+            "vin": self._vin,
+            "clientType": "1",
+            "seq": str(int(time.time() * 1000)),
+            "taskId": self._task_id or "",
+        }
+
+    def set_task_id(self, task_id: str) -> None:
+        """Set the taskId obtained from the control-PIN check."""
+        self._task_id = task_id
+
+    async def check_password(self, pin: str) -> dict[str, Any]:
+        """Verify the control PIN via TSP → returns {'taskId': ...}.
+
+        This is the TSP-side endpoint (works in both OAuth and direct-token
+        modes). The Esteo backend has a parallel endpoint used by the OAuth
+        client.
+        """
+        payload = await self._post(
+            "/asc/vehicleControl/check-password",
+            {
+                "vin": self._vin,
+                "password": pin,
+                "clientType": "1",
+                "seq": str(int(time.time() * 1000)),
+            },
+        )
+        body = payload.get("body") if isinstance(payload, dict) else None
+        if isinstance(body, dict):
+            return body
+        if isinstance(body, str) and body:
+            try:
+                return json.loads(body)
+            except json.JSONDecodeError:
+                return {}
+        return payload if isinstance(payload, dict) else {}
+
+    async def send_command(self, path: str, extra: dict[str, Any] | None = None) -> Any:
+        """Send a signed command POST to the TSP."""
+        body = self._cmd_base()
+        if extra:
+            body.update(extra)
+        payload = await self._post(path, body)
+        return payload
+
+    async def lock_doors(self) -> Any:
+        return await self.send_command("/asc/vehicleControl/lockControl", {"swi": "1"})
+
+    async def unlock_doors(self) -> Any:
+        return await self.send_command("/asc/vehicleControl/lockControl", {"swi": "0"})
+
+    async def start_engine(self, duration_minutes: int = 10) -> Any:
+        return await self.send_command("/asc/vehicleControl/engineControl", {
+            "swi": "1", "engineTimes": str(duration_minutes),
+        })
+
+    async def stop_engine(self) -> Any:
+        return await self.send_command("/asc/vehicleControl/engineControl", {"swi": "0"})
+
+    async def find_car(self) -> Any:
+        return await self.send_command("/asc/vehicleControl/findCar")
+
+    async def open_trunk(self) -> Any:
+        return await self.send_command("/asc/vehicleControl/powerLiftgateControl", {"swi": "1"})
+
+    async def control_climate(self, on: bool, temperature: float = 22.0,
+                              duration: int = 10) -> Any:
+        return await self.send_command("/asc/vehicleControl/airControl", {
+            "swi": "1" if on else "0",
+            "temperature": str(temperature),
+            "airConditionTimes": str(duration),
+        })
+
+    async def control_windshield_defrost(self, on: bool) -> Any:
+        return await self.send_command("/asc/vehicleControl/frontWindshieldControl", {
+            "swi": "1", "frontWindshieldHeat": "1" if on else "0",
+        })
+
+    async def control_rear_defrost(self, on: bool) -> Any:
+        return await self.send_command("/asc/vehicleControl/backDefrostingControl", {
+            "swi": "1" if on else "0",
+        })
+
+    async def set_location_sharing(self, enabled: bool) -> Any:
+        """Enable/disable vehicle location sharing."""
+        return await self.send_command("/act/vehicleLocation/setSwitch", {
+            "swi": "1" if enabled else "0",
+        })
 
 
 # ---------------------------------------------------------------------------

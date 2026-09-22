@@ -25,6 +25,7 @@ from .const import (
     CONF_ACCESS_TOKEN,
     CONF_ACCOUNT_ID,
     CONF_AUTH_METHOD,
+    CONF_CONTROL_PIN,
     CONF_EXPIRES_AT,
     CONF_REFRESH_TOKEN,
     CONF_SCAN_INTERVAL,
@@ -68,6 +69,7 @@ class EsteoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Initialize the flow."""
         self._tokens: dict[str, Any] | None = None
         self._vehicles: list[dict[str, Any]] = []
+        self._control_pin: str | None = None
 
     # ------------------------------------------------------------------
     async def async_step_user(
@@ -103,6 +105,7 @@ class EsteoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             phone = user_input["phone"].strip()
             password = user_input["password"]
+            self._control_pin = (user_input.get("control_pin") or "").strip() or None
             # Need a session with unsafe cookie jar (redirect chain goes via HTTP)
             import aiohttp as _aiohttp
 
@@ -129,6 +132,7 @@ class EsteoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 {
                     vol.Required("phone"): str,
                     vol.Required("password"): str,
+                    vol.Optional("control_pin"): str,
                 }
             ),
             errors=errors,
@@ -209,6 +213,7 @@ class EsteoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             CONF_USER_TOKEN: user_token,
             CONF_ACCOUNT_ID: account_id,
             CONF_TASK_ID: task_id,
+            CONF_CONTROL_PIN: (self._control_pin or None),
         }
         await self.async_set_unique_id(vin)
         return self.async_create_entry(title=data[CONF_VEHICLE_NAME], data=data)
@@ -314,6 +319,15 @@ class EsteoOptionsFlow(config_entries.OptionsFlow):
                 except Exception as err:  # noqa: BLE001
                     _LOGGER.warning("Could not refresh TSP token in options: %s", err)
 
+            # Allow changing the control PIN (for both OAuth and direct modes)
+            pin = (user_input.get(CONF_CONTROL_PIN) or "").strip()
+            if pin:
+                new_data = dict(self._entry.data)
+                new_data[CONF_CONTROL_PIN] = pin
+                self.hass.config_entries.async_update_entry(
+                    self._entry, data=new_data
+                )
+
             return self.async_create_entry(
                 title="", data={CONF_SCAN_INTERVAL: scan_interval}
             )
@@ -326,6 +340,10 @@ class EsteoOptionsFlow(config_entries.OptionsFlow):
                     self._entry.data.get(CONF_SCAN_INTERVAL, 300),
                 ),
             ): int,
+            vol.Optional(
+                CONF_CONTROL_PIN,
+                description={"suggested_value": self._entry.data.get(CONF_CONTROL_PIN)},
+            ): str,
         }
         if self._entry.data.get(CONF_AUTH_METHOD) == AUTH_METHOD_DIRECT:
             schema[

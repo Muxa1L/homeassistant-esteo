@@ -48,6 +48,7 @@ CONF_USER_TOKEN: Final = "user_token"  # TSP token from /chery/account/login
 CONF_ACCOUNT_ID: Final = "account_id"
 CONF_VIN: Final = "vin"
 CONF_TASK_ID: Final = "task_id"
+CONF_CONTROL_PIN: Final = "control_pin"
 CONF_VEHICLE_NAME: Final = "vehicle_name"
 
 # ---------------------------------------------------------------------------
