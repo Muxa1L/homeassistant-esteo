@@ -134,20 +134,23 @@ class EsteoCoordinator(DataUpdateCoordinator[VehicleState]):
         self._task_id_ts = time.time()
         _LOGGER.debug("TaskId obtained for %s", self.vin)
 
-    async def execute_command(self, coro) -> Any:
-        """Execute a TSP command, ensuring taskId is valid first."""
+    async def execute_command(self, coro_factory) -> Any:
+        """Execute a TSP command. coro_factory: zero-arg callable → coroutine.
+
+        Ensures TSP credentials and a fresh taskId, then runs the command;
+        on failure refreshes the taskId and retries once (a coroutine cannot
+        be re-awaited, hence the factory).
+        """
         await self.ensure_tsp_credentials()
         await self.ensure_task_id()
         try:
-            return await coro
+            return await coro_factory()
         except TspError as err:
-            # taskId might have expired — retry once
-            if err.code and str(err.code) != TSP_SUCCESS_CODE:
-                _LOGGER.debug("Command failed (%s) — refreshing taskId and retrying", err.code)
-                self._tsp._task_id = None
-                await self.ensure_task_id()
-                return await coro
-            raise
+            # taskId might have expired — refresh it and retry once
+            _LOGGER.debug("Command failed (%s) — refreshing taskId and retrying", err.code)
+            self._tsp._task_id = None
+            await self.ensure_task_id()
+            return await coro_factory()
 
     def _store_oauth_tokens(self, tokens: dict[str, Any]) -> None:
         """Persist refreshed OAuth tokens into the config entry data."""

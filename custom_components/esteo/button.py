@@ -54,5 +54,7 @@ class EsteoButton(EsteoVehicleEntity, ButtonEntity):
 
     async def async_press(self) -> None:
         """Execute the command."""
-        await self.coordinator.execute_command(self._press_fn(self.coordinator))
+        await self.coordinator.execute_command(
+            lambda: self._press_fn(self.coordinator)
+        )
         await self.coordinator.async_request_refresh()

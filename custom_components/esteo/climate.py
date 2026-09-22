@@ -70,7 +70,9 @@ class EsteoClimate(EsteoVehicleEntity, ClimateEntity):
             self._target_temp = float(temp)
         if self.hvac_mode != HVACMode.OFF:
             await self.coordinator.execute_command(
-                self.coordinator._tsp.control_climate(True, self._target_temp, 10)
+                lambda: self.coordinator._tsp.control_climate(
+                    True, self._target_temp, 10
+                )
             )
             await self.coordinator.async_request_refresh()
 
@@ -78,11 +80,13 @@ class EsteoClimate(EsteoVehicleEntity, ClimateEntity):
         """Set the HVAC mode."""
         if hvac_mode == HVACMode.AUTO:
             await self.coordinator.execute_command(
-                self.coordinator._tsp.control_climate(True, self._target_temp, 10)
+                lambda: self.coordinator._tsp.control_climate(
+                    True, self._target_temp, 10
+                )
             )
         else:
             await self.coordinator.execute_command(
-                self.coordinator._tsp.control_climate(False)
+                lambda: self.coordinator._tsp.control_climate(False)
             )
         await self.coordinator.async_request_refresh()
 

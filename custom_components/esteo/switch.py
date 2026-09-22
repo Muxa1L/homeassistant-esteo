@@ -95,10 +95,14 @@ class EsteoSwitch(EsteoVehicleEntity, SwitchEntity):
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn the switch on."""
-        await self.coordinator.execute_command(self._turn_on_fn(self.coordinator))
+        await self.coordinator.execute_command(
+            lambda: self._turn_on_fn(self.coordinator)
+        )
         await self.coordinator.async_request_refresh()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn the switch off."""
-        await self.coordinator.execute_command(self._turn_off_fn(self.coordinator))
+        await self.coordinator.execute_command(
+            lambda: self._turn_off_fn(self.coordinator)
+        )
         await self.coordinator.async_request_refresh()

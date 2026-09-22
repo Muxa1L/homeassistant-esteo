@@ -45,10 +45,14 @@ class EsteoDoorLock(EsteoVehicleEntity, LockEntity):
 
     async def async_lock(self, **kwargs) -> None:
         """Lock the doors."""
-        await self.coordinator.execute_command(self.coordinator._tsp.lock_doors())
+        await self.coordinator.execute_command(
+            lambda: self.coordinator._tsp.lock_doors()
+        )
         await self.coordinator.async_request_refresh()
 
     async def async_unlock(self, **kwargs) -> None:
         """Unlock the doors."""
-        await self.coordinator.execute_command(self.coordinator._tsp.unlock_doors())
+        await self.coordinator.execute_command(
+            lambda: self.coordinator._tsp.unlock_doors()
+        )
         await self.coordinator.async_request_refresh()
