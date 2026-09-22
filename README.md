@@ -1,8 +1,7 @@
 # Home Assistant — Esteo (Chery RU) integration
 
 **Unofficial, read-only** Home Assistant integration for Chery vehicles sold via the
-Esteo (RU) dealer network. It is built entirely on reverse-engineered cloud APIs
-(see `../API_REFERENCE.md`) — there is no public/official API.
+Esteo (RU) dealer network. 
 
 > ⚠️ Work in progress — read-only status only (sensors, binary sensors, GPS tracker).
 > Remote control (engine start, climate, locks) is planned but **not** implemented yet.
