@@ -1,0 +1,58 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Esteo (Chery RU)",
+        "description": "Connect to your Chery vehicle via the Esteo telematics.",
+        "data": {
+          "auth_method": "Authentication method"
+        }
+      },
+      "oauth": {
+        "title": "Esteo account",
+        "description": "1. Open the authorization URL below in a browser and log in with your Esteo account.\n2. After login the browser will land on `{redirect_uri}` (the page may not load — that is OK).\n3. Copy the FULL address from the browser address bar (it must contain `code=`) and paste it below.\n\nAuthorization URL: {authorize_url}",
+        "data": {
+          "redirect_url": "Paste the final browser URL here"
+        }
+      },
+      "select_vehicle": {
+        "title": "Select vehicle",
+        "description": "Choose the vehicle to add to Home Assistant.",
+        "data": {
+          "vin": "Vehicle"
+        }
+      },
+      "direct": {
+        "title": "Direct TSP token (advanced)",
+        "description": "Enter the Chery TSP userToken (obtained e.g. via a traffic capture or from integration logs) and the VIN.",
+        "data": {
+          "vin": "VIN",
+          "user_token": "TSP user token",
+          "account_id": "Account ID (optional, for MQTT later)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect",
+      "oauth_failed": "Authorization failed — check that you pasted the full URL with the code",
+      "state_mismatch": "This redirect belongs to a different login attempt — restart the setup and use the fresh URL",
+      "tsp_validation_failed": "The TSP rejected the token/VIN — check the values",
+      "tsp_empty_state": "The vehicle returned an empty state — is the token valid?"
+    },
+    "abort": {
+      "no_vehicles": "No vehicles found in your Esteo garage",
+      "tsp_login_failed": "Could not obtain Chery TSP credentials for this account"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Esteo options",
+        "data": {
+          "scan_interval": "Polling interval (seconds)",
+          "user_token": "New TSP user token (direct mode)"
+        }
+      }
+    }
+  }
+}
