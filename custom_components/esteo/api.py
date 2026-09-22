@@ -50,6 +50,15 @@ class HydraAuthError(EsteoError):
     """OAuth token exchange/refresh failed."""
 
 
+class EsteoReauthRequired(HydraAuthError):
+    """Stored credentials are missing or rejected — user must re-authenticate.
+
+    Raised when the refresh token is expired AND a full phone+password
+    re-login is impossible (no credentials stored) or fails (password
+    changed). Home Assistant should show the re-auth flow.
+    """
+
+
 class EsteoApiError(EsteoError):
     """Esteo backend request failed."""
 
@@ -195,11 +204,19 @@ class EsteoClient:
         session: aiohttp.ClientSession,
         token_provider: Callable[[], dict[str, Any]],
         token_updater: Callable[[dict[str, Any]], None] | None = None,
+        relogin_handler: Callable[[], "Any"] | None = None,
     ) -> None:
-        """token_provider returns {'access_token','refresh_token','expires_at'}."""
+        """token_provider returns {'access_token','refresh_token','expires_at'}.
+
+        relogin_handler is an optional async callable that performs a full
+        phone+password re-login (returning a fresh token dict) when the
+        refresh token is expired/revoked. If None, only refresh-token
+        rotation is attempted.
+        """
         self._session = session
         self._token_provider = token_provider
         self._token_updater = token_updater
+        self._relogin_handler = relogin_handler
 
     async def _access_token(self, force_refresh: bool = False) -> str:
         tokens = self._token_provider()
@@ -208,17 +225,29 @@ class EsteoClient:
         if not force_refresh and access and expires_at - 60 > time.time():
             return access
         refresh = tokens.get("refresh_token")
-        if not refresh:
+        if refresh:
+            _LOGGER.debug("Refreshing Esteo OAuth token")
+            try:
+                payload = await hydra_refresh_token(self._session, refresh)
+                new_tokens = {
+                    "access_token": payload["access_token"],
+                    "refresh_token": payload.get("refresh_token", refresh),
+                    "expires_at": token_expiry(payload),
+                }
+                if self._token_updater:
+                    self._token_updater(new_tokens)
+                return new_tokens["access_token"]
+            except HydraAuthError as err:
+                _LOGGER.warning("OAuth refresh token failed: %s", err)
+                if not self._relogin_handler:
+                    raise
+                _LOGGER.info("Falling back to full phone+password re-login")
+        elif not self._relogin_handler:
             raise HydraAuthError(
                 "Esteo access token expired and no refresh token available"
             )
-        _LOGGER.debug("Refreshing Esteo OAuth token")
-        payload = await hydra_refresh_token(self._session, refresh)
-        new_tokens = {
-            "access_token": payload["access_token"],
-            "refresh_token": payload.get("refresh_token", refresh),
-            "expires_at": token_expiry(payload),
-        }
+        # Full re-login via the relogin_handler (phone + password)
+        new_tokens = await self._relogin_handler()
         if self._token_updater:
             self._token_updater(new_tokens)
         return new_tokens["access_token"]

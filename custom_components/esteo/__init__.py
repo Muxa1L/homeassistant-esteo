@@ -34,6 +34,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass,
         dict(entry.data),
         int(scan_interval),
+        config_entry=entry,
     )
     coordinator.set_entry_update_callback(
         lambda: _persist_entry(hass, entry, coordinator._entry_data)

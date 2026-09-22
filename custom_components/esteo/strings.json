@@ -31,6 +31,15 @@
           "user_token": "TSP user token",
           "account_id": "Account ID (optional, for MQTT later)"
         }
+      },
+      "reauth_credentials": {
+        "title": "Re-authenticate Esteo",
+        "description": "Your Esteo session has expired and could not be renewed automatically. Re-enter your credentials. Phone format: {phone_hint}",
+        "data": {
+          "phone": "Phone number",
+          "password": "Password",
+          "control_pin": "Control PIN (optional, for remote commands)"
+        }
       }
     },
     "error": {
@@ -41,7 +50,8 @@
     },
     "abort": {
       "no_vehicles": "No vehicles found in your Esteo garage",
-      "tsp_login_failed": "Could not obtain Chery TSP credentials for this account"
+      "tsp_login_failed": "Could not obtain Chery TSP credentials for this account",
+      "reauth_successful": "Re-authentication was successful"
     }
   },
   "options": {

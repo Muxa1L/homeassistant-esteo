@@ -10,13 +10,16 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.config_entries import ConfigEntryAuthFailed
 
 from .api import (
     CheryTspClient,
     EsteoApiError,
     EsteoClient,
+    EsteoReauthRequired,
     HydraAuthError,
     TspError,
+    login_with_credentials,
 )
 from .const import (
     AUTH_METHOD_DIRECT,
@@ -25,6 +28,8 @@ from .const import (
     CONF_ACCOUNT_ID,
     CONF_CONTROL_PIN,
     CONF_EXPIRES_AT,
+    CONF_PASSWORD,
+    CONF_PHONE,
     CONF_REFRESH_TOKEN,
     CONF_USER_TOKEN,
     CONF_VEHICLE_NAME,
@@ -41,15 +46,23 @@ _LOGGER = logging.getLogger(__name__)
 class EsteoCoordinator(DataUpdateCoordinator[VehicleState]):
     """Poll the Chery TSP realtime state for one vehicle."""
 
-    def __init__(self, hass: HomeAssistant, entry_data: dict[str, Any], scan_interval: int) -> None:
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        entry_data: dict[str, Any],
+        scan_interval: int,
+        config_entry: Any = None,
+    ) -> None:
         """Initialize the coordinator.
 
         entry_data is the config-entry data dict:
           - oauth method: access_token/refresh_token/expires_at + vin (+ user_token cache)
           - direct method: user_token + vin
+        config_entry is the ConfigEntry (needed for ConfigEntryAuthFailed).
         """
         self._hass = hass
         self._entry_data = entry_data
+        self.config_entry = config_entry
         self._auth_method = entry_data.get("auth_method", AUTH_METHOD_OAUTH)
         self.vin: str = entry_data[CONF_VIN]
         self.vehicle_name: str = entry_data.get(CONF_VEHICLE_NAME) or self.vin
@@ -68,6 +81,7 @@ class EsteoCoordinator(DataUpdateCoordinator[VehicleState]):
                     CONF_EXPIRES_AT: self._entry_data.get(CONF_EXPIRES_AT),
                 },
                 token_updater=self._store_oauth_tokens,
+                relogin_handler=self._relogin_oauth,
             )
 
         self._tsp = CheryTspClient(
@@ -165,6 +179,43 @@ class EsteoCoordinator(DataUpdateCoordinator[VehicleState]):
             updater()
         _LOGGER.debug("TSP token refreshed for %s", self.vin)
 
+    async def _relogin_oauth(self) -> dict[str, Any]:
+        """Full phone+password re-login when the refresh token is expired.
+
+        Creates a temporary session with unsafe cookie jar (the OAuth
+        redirect chain goes through HTTP). Returns a fresh token dict and
+        also refreshes the TSP credentials.
+        """
+        import aiohttp as _aiohttp
+
+        phone = self._entry_data.get(CONF_PHONE)
+        password = self._entry_data.get(CONF_PASSWORD)
+        if not phone or not password:
+            raise EsteoReauthRequired(
+                "OAuth refresh token expired and no phone/password stored — "
+                "re-authenticate the integration in settings."
+            )
+        _LOGGER.info("Performing full re-login for %s", self.vin)
+        jar = _aiohttp.CookieJar(unsafe=True)
+        timeout = _aiohttp.ClientTimeout(total=30)
+        try:
+            async with _aiohttp.ClientSession(
+                cookie_jar=jar, timeout=timeout
+            ) as login_session:
+                tokens = await login_with_credentials(login_session, phone, password)
+        except HydraAuthError as err:
+            # Stored phone/password no longer valid (e.g. password changed)
+            raise EsteoReauthRequired(
+                f"Stored credentials were rejected during re-login: {err}"
+            ) from err
+        # Persist new OAuth tokens
+        self._entry_data[CONF_ACCESS_TOKEN] = tokens["access_token"]
+        self._entry_data[CONF_REFRESH_TOKEN] = tokens.get("refresh_token", "")
+        self._entry_data[CONF_EXPIRES_AT] = tokens["expires_at"]
+        # The EsteoClient now has a valid access token; refresh TSP too
+        await self._relogin_tsp()
+        return tokens
+
     async def ensure_tsp_credentials(self) -> None:
         """Fetch TSP credentials on startup if not cached yet."""
         if self._entry_data.get(CONF_USER_TOKEN) or self._esteo is None:
@@ -181,6 +232,11 @@ class EsteoCoordinator(DataUpdateCoordinator[VehicleState]):
             if not raw:
                 raise UpdateFailed("TSP returned an empty state body")
             return VehicleState.from_data_pool(raw)
+        except EsteoReauthRequired as err:
+            # Stored credentials missing/rejected → HA shows the re-auth flow
+            if self.config_entry is not None:
+                raise ConfigEntryAuthFailed(self.config_entry, str(err)) from err
+            raise UpdateFailed(f"Esteo re-authentication required: {err}") from err
         except HydraAuthError as err:
             raise UpdateFailed(f"Esteo authentication failed: {err}") from err
         except EsteoApiError as err:

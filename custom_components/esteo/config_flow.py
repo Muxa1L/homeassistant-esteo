@@ -27,6 +27,8 @@ from .const import (
     CONF_AUTH_METHOD,
     CONF_CONTROL_PIN,
     CONF_EXPIRES_AT,
+    CONF_PASSWORD,
+    CONF_PHONE,
     CONF_REFRESH_TOKEN,
     CONF_SCAN_INTERVAL,
     CONF_TASK_ID,
@@ -70,6 +72,8 @@ class EsteoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._tokens: dict[str, Any] | None = None
         self._vehicles: list[dict[str, Any]] = []
         self._control_pin: str | None = None
+        self._phone: str | None = None
+        self._password: str | None = None
 
     # ------------------------------------------------------------------
     async def async_step_user(
@@ -105,6 +109,8 @@ class EsteoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             phone = user_input["phone"].strip()
             password = user_input["password"]
+            self._phone = phone
+            self._password = password
             self._control_pin = (user_input.get("control_pin") or "").strip() or None
             # Need a session with unsafe cookie jar (redirect chain goes via HTTP)
             import aiohttp as _aiohttp
@@ -208,6 +214,8 @@ class EsteoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         data = {
             CONF_AUTH_METHOD: AUTH_METHOD_OAUTH,
             **(self._tokens or {}),
+            CONF_PHONE: self._phone,
+            CONF_PASSWORD: self._password,
             CONF_VIN: vin,
             CONF_VEHICLE_NAME: _vehicle_title(vehicle, vin),
             CONF_USER_TOKEN: user_token,
@@ -268,6 +276,93 @@ class EsteoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     ) -> EsteoOptionsFlow:
         """Return the options flow handler."""
         return EsteoOptionsFlow(config_entry)
+
+    # ------------------------------------------------------------------
+    # Re-authentication (triggered when ConfigEntryAuthFailed is raised)
+    # ------------------------------------------------------------------
+    async def async_step_reauth(
+        self, entry_data: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Start re-auth when tokens expire (phone/password not stored or invalid)."""
+        if entry_data and isinstance(entry_data, dict):
+            # entry_data IS entry.data — prefill the control PIN
+            self._control_pin = entry_data.get(CONF_CONTROL_PIN)
+        return await self.async_step_reauth_credentials()
+
+    async def async_step_reauth_credentials(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Re-enter phone + password to refresh all tokens."""
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            phone = user_input["phone"].strip()
+            password = user_input["password"]
+            self._phone = phone
+            self._password = password
+            self._control_pin = (user_input.get("control_pin") or "").strip() or None
+            import aiohttp as _aiohttp
+
+            jar = _aiohttp.CookieJar(unsafe=True)
+            timeout = _aiohttp.ClientTimeout(total=30)
+            try:
+                async with _aiohttp.ClientSession(
+                    cookie_jar=jar, timeout=timeout
+                ) as login_session:
+                    self._tokens = await login_with_credentials(
+                        login_session, phone, password
+                    )
+                # Get fresh TSP credentials
+                session = async_get_clientsession(self.hass)
+                esteo = EsteoClient(session, lambda: self._tokens or {}, None)
+                creds = await esteo.login_tsp()
+                user_token = creds.get("userToken") or ""
+                account_id = creds.get("accountId")
+                if not user_token:
+                    errors["base"] = "tsp_validation_failed"
+                else:
+                    entry = self.hass.config_entries.async_get_entry(
+                        self.context["entry_id"]
+                    ) if "entry_id" in self.context else None
+                    if entry:
+                        new_data = dict(entry.data)
+                        new_data.update(self._tokens)
+                        new_data[CONF_PHONE] = phone
+                        new_data[CONF_PASSWORD] = password
+                        new_data[CONF_USER_TOKEN] = user_token
+                        if account_id is not None:
+                            new_data[CONF_ACCOUNT_ID] = account_id
+                        if self._control_pin:
+                            new_data[CONF_CONTROL_PIN] = self._control_pin
+                        self.hass.config_entries.async_update_entry(
+                            entry, data=new_data
+                        )
+                        await self.hass.config_entries.async_reload(entry.entry_id)
+                    return self.async_abort(reason="reauth_successful")
+            except HydraAuthError as err:
+                _LOGGER.warning("Re-auth login failed: %s", err)
+                errors["base"] = "login_failed"
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.warning("Re-auth error: %s", err)
+                errors["base"] = "cannot_connect"
+
+        return self.async_show_form(
+            step_id="reauth_credentials",
+            data_schema=vol.Schema(
+                {
+                    vol.Required("phone"): str,
+                    vol.Required("password"): str,
+                    vol.Optional(
+                        "control_pin",
+                        description={"suggested_value": self._control_pin},
+                    ): str,
+                }
+            ),
+            errors=errors,
+            description_placeholders={
+                "phone_hint": "+7 9XX XXX-XX-XX",
+            },
+        )
+
 
 class EsteoOptionsFlow(config_entries.OptionsFlow):
     """Options: polling interval, and TSP token refresh (direct mode)."""
