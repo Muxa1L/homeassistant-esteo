@@ -87,7 +87,8 @@ OPEN_FLAGS: Final = (
     "engineState",
 )
 
-# fields where "1" means LOCKED/ENABLED (assumption — verify)
+# fields where "0" means LOCKED/ENABLED and "1" means unlocked/disabled
+# (doorLock confirmed inverted against live data: "0" = locked)
 LOCKED_FLAGS: Final = (
     "doorLock",
     "trunkLock",

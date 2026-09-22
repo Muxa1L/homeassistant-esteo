@@ -150,7 +150,7 @@ class VehicleState:
         state.charge_gun_connected = _flag(raw, "chargeGunState")
         state.hood_open = _flag(raw, "hood")
         state.trunk_open = _flag(raw, "trunkDoor")
-        state.doors_locked = _flag(raw, "doorLock")
+        state.doors_locked = raw.get("doorLock") == "0"  # "0" = locked, "1" = unlocked (inverted)
 
         state.door_fl_open = _flag(raw, "frontLeftDoor")
         state.door_fr_open = _flag(raw, "frontRightDoor")

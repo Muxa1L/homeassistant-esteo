@@ -210,7 +210,7 @@ class EsteoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             CONF_ACCOUNT_ID: account_id,
             CONF_TASK_ID: task_id,
         }
-        await self._async_set_unique_id(vin)
+        await self.async_set_unique_id(vin)
         return self.async_create_entry(title=data[CONF_VEHICLE_NAME], data=data)
 
     # ------------------------------------------------------------------
@@ -229,7 +229,7 @@ class EsteoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 if not raw:
                     errors["base"] = "tsp_empty_state"
                 else:
-                    await self._async_set_unique_id(vin)
+                    await self.async_set_unique_id(vin)
                     return self.async_create_entry(
                         title=f"Chery {vin[-6:]}",
                         data={
