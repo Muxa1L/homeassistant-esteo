@@ -40,7 +40,7 @@ _LOGGER = logging.getLogger(__name__)
 
 def _vehicle_title(vehicle: dict[str, Any], vin: str) -> str:
     """Best-effort human name for a garage entry."""
-    for key in ("name", "title", "modelName", "model", "brandModel"):
+    for key in ("fullName", "nameEn", "name", "title", "modelName", "model"):
         value = vehicle.get(key)
         if value:
             return str(value)
