@@ -4,12 +4,12 @@ Runs the full read-only pipeline OUTSIDE Home Assistant so you can verify
 the reverse-engineered protocol with your real account before installing
 the integration:
 
-    OAuth (Hydra PKCE, manual paste) → Esteo garage → TSP credentials
+    Headless OAuth login (phone + password) → Esteo garage → TSP credentials
     → signed realtime state query → pretty-printed vehicle status
 
 Usage:
-    python tools/live_check.py                 # interactive OAuth flow
-    python tools/live_check.py --loop          # keep polling every 60 s
+    python tools/live_check.py --phone +79991234567 --password SECRET
+    python tools/live_check.py --phone +79991234567 --password SECRET --loop
     python tools/live_check.py --direct <USER_TOKEN> --vin <VIN>
                                               # bypass Esteo (captured token)
 
@@ -65,38 +65,16 @@ def hr(title: str) -> None:
     print("=" * 60)
 
 
-async def oauth_flow(session: aiohttp.ClientSession) -> dict:
-    """Interactive Hydra PKCE flow; returns token dict."""
-    import secrets as _secrets
-
-    verifier, challenge = api.generate_pkce_pair()
-    state_value = _secrets.token_urlsafe(16)
-    url = api.build_authorize_url(state_value, challenge)
-    hr("STEP 1 — Authorization")
-    print("Open this URL in your browser and log in with your Esteo account:\n")
-    print(url)
+async def headless_login(session: aiohttp.ClientSession, phone: str, password: str) -> dict:
+    """Headless OAuth login via phone + password (no browser)."""
+    hr("STEP 1 — Headless login (phone + password)")
+    tokens = await api.login_with_credentials(session, phone, password)
     print(
-        "\nAfter login the browser lands on https://app.omoda.dev/auth#code=…"
-        "\n(the page may fail to load — that is OK)."
-        "\nCopy the FULL address from the browser address bar and paste it here:"
+        f"access_token:  {tokens['access_token'][:40]}…\n"
+        f"refresh_token: {str(tokens.get('refresh_token'))[:20]}…\n"
+        f"expires_at:    {tokens.get('expires_at')}"
     )
-    pasted = input("\n> ").strip()
-    parsed = api.parse_code_from_redirect(pasted)
-    if parsed.get("state") and parsed["state"] != state_value:
-        print("WARNING: state mismatch (continuing anyway in live-check mode)")
-
-    hr("STEP 2 — Token exchange")
-    payload = await api.hydra_exchange_code(session, parsed["code"], verifier)
-    print(
-        f"access_token:  {payload['access_token'][:40]}…"
-        f"\nrefresh_token: {str(payload.get('refresh_token'))[:20]}…"
-        f"\nexpires_in:    {payload.get('expires_in')} s"
-    )
-    return {
-        "access_token": payload["access_token"],
-        "refresh_token": payload.get("refresh_token", ""),
-        "expires_at": api.token_expiry(payload),
-    }
+    return tokens
 
 
 def print_state(state: models.VehicleState) -> None:
@@ -122,7 +100,11 @@ def print_state(state: models.VehicleState) -> None:
     print(f"(raw fields in latest response: {len(state.raw)})")
 
 async def run(args: argparse.Namespace) -> int:
-    async with aiohttp.ClientSession() as session:
+    # Login session needs unsafe cookie jar (redirect chain goes via HTTP)
+    import aiohttp as _aiohttp
+
+    jar = _aiohttp.CookieJar(unsafe=True)
+    async with _aiohttp.ClientSession(cookie_jar=jar) as session:
         if args.direct:
             vin = (args.vin or "").strip().upper()
             if not vin:
@@ -137,7 +119,11 @@ async def run(args: argparse.Namespace) -> int:
             print_state(models.VehicleState.from_data_pool(raw))
             return 0
 
-        tokens = await oauth_flow(session)
+        if not args.phone or not args.password:
+            print("Either --phone + --password (headless login) or --direct + --vin")
+            return 2
+
+        tokens = await headless_login(session, args.phone, args.password)
         esteo = api.EsteoClient(session, lambda: tokens, lambda t: tokens.update(t))
 
         hr("STEP 3 — Garage (GET /telematics/v1/chery/vehicle)")
@@ -209,6 +195,14 @@ async def run(args: argparse.Namespace) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--phone",
+        help="Esteo account phone number (e.g. +79991234567) for headless login",
+    )
+    parser.add_argument(
+        "--password",
+        help="Esteo account password for headless login",
+    )
     parser.add_argument(
         "--direct", metavar="USER_TOKEN",
         help="skip Esteo OAuth; validate a captured TSP userToken directly",

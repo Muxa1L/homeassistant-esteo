@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import secrets
 from typing import Any
 
 import aiohttp
@@ -18,11 +17,7 @@ from .api import (
     CheryTspClient,
     EsteoClient,
     HydraAuthError,
-    build_authorize_url,
-    generate_pkce_pair,
-    hydra_exchange_code,
-    parse_code_from_redirect,
-    token_expiry,
+    login_with_credentials,
 )
 from .const import (
     AUTH_METHOD_DIRECT,
@@ -38,7 +33,6 @@ from .const import (
     CONF_VEHICLE_NAME,
     CONF_VIN,
     DOMAIN,
-    HYDRA_REDIRECT_URI,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -72,9 +66,6 @@ class EsteoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     def __init__(self) -> None:
         """Initialize the flow."""
-        self._code_verifier: str | None = None
-        self._challenge: str | None = None
-        self._state: str | None = None
         self._tokens: dict[str, Any] | None = None
         self._vehicles: list[dict[str, Any]] = []
 
@@ -86,7 +77,7 @@ class EsteoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             method = user_input[CONF_AUTH_METHOD]
             if method == AUTH_METHOD_OAUTH:
-                return await self.async_step_oauth()
+                return await self.async_step_credentials()
             return await self.async_step_direct()
 
         return self.async_show_form(
@@ -95,7 +86,7 @@ class EsteoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 {
                     vol.Required(CONF_AUTH_METHOD): vol.In(
                         {
-                            AUTH_METHOD_OAUTH: "Esteo account (recommended)",
+                            AUTH_METHOD_OAUTH: "Esteo account (phone + password)",
                             AUTH_METHOD_DIRECT: "Direct TSP token (advanced)",
                         }
                     )
@@ -104,46 +95,45 @@ class EsteoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
 
     # ------------------------------------------------------------------
-    async def async_step_oauth(
+    async def async_step_credentials(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Step 2a: show the authorize URL, collect the pasted redirect."""
+        """Step 2a: headless login with phone + password (no browser)."""
         errors: dict[str, str] = {}
         if user_input is not None:
-            session = async_get_clientsession(self.hass)
-            try:
-                parsed = parse_code_from_redirect(user_input["redirect_url"])
-                if self._state and parsed.get("state") != self._state:
-                    errors["redirect_url"] = "state_mismatch"
-                else:
-                    tokens = await hydra_exchange_code(
-                        session, parsed["code"], self._code_verifier or ""
-                    )
-                    self._tokens = {
-                        CONF_ACCESS_TOKEN: tokens["access_token"],
-                        CONF_REFRESH_TOKEN: tokens.get("refresh_token", ""),
-                        CONF_EXPIRES_AT: token_expiry(tokens),
-                    }
-                    return await self._async_after_tokens()
-            except HydraAuthError as err:
-                _LOGGER.warning("OAuth flow failed: %s", err)
-                errors["redirect_url"] = "oauth_failed"
-            except (aiohttp.ClientError, TimeoutError) as err:
-                _LOGGER.warning("Network error during OAuth: %s", err)
-                errors["redirect_url"] = "cannot_connect"
+            phone = user_input["phone"].strip()
+            password = user_input["password"]
+            # Need a session with unsafe cookie jar (redirect chain goes via HTTP)
+            import aiohttp as _aiohttp
 
-        if self._code_verifier is None:
-            self._code_verifier, self._challenge = generate_pkce_pair()
-            self._state = secrets.token_urlsafe(16)
-        authorize_url = build_authorize_url(self._state, self._challenge)
+            jar = _aiohttp.CookieJar(unsafe=True)
+            timeout = _aiohttp.ClientTimeout(total=30)
+            try:
+                async with _aiohttp.ClientSession(
+                    cookie_jar=jar, timeout=timeout
+                ) as login_session:
+                    self._tokens = await login_with_credentials(
+                        login_session, phone, password
+                    )
+                return await self._async_after_tokens()
+            except HydraAuthError as err:
+                _LOGGER.warning("Login failed: %s", err)
+                errors["base"] = "login_failed"
+            except (_aiohttp.ClientError, TimeoutError) as err:
+                _LOGGER.warning("Network error during login: %s", err)
+                errors["base"] = "cannot_connect"
 
         return self.async_show_form(
-            step_id="oauth",
-            data_schema=vol.Schema({vol.Required("redirect_url"): str}),
+            step_id="credentials",
+            data_schema=vol.Schema(
+                {
+                    vol.Required("phone"): str,
+                    vol.Required("password"): str,
+                }
+            ),
             errors=errors,
             description_placeholders={
-                "authorize_url": authorize_url,
-                "redirect_uri": HYDRA_REDIRECT_URI,
+                "phone_hint": "+7 9XX XXX-XX-XX",
             },
         )
 

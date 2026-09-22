@@ -8,11 +8,12 @@
           "auth_method": "Authentication method"
         }
       },
-      "oauth": {
+      "credentials": {
         "title": "Esteo account",
-        "description": "1. Open the authorization URL below in a browser and log in with your Esteo account.\n2. After login the browser will land on `{redirect_uri}` (the page may not load — that is OK).\n3. Copy the FULL address from the browser address bar (it must contain `code=`) and paste it below.\n\nAuthorization URL: {authorize_url}",
+        "description": "Enter your Esteo account credentials (the same phone number and password you use in the Esteo mobile app). Phone format: {phone_hint}",
         "data": {
-          "redirect_url": "Paste the final browser URL here"
+          "phone": "Phone number",
+          "password": "Password"
         }
       },
       "select_vehicle": {
@@ -33,9 +34,8 @@
       }
     },
     "error": {
-      "cannot_connect": "Failed to connect",
-      "oauth_failed": "Authorization failed — check that you pasted the full URL with the code",
-      "state_mismatch": "This redirect belongs to a different login attempt — restart the setup and use the fresh URL",
+      "cannot_connect": "Failed to connect — check your network",
+      "login_failed": "Login failed — check your phone number and password",
       "tsp_validation_failed": "The TSP rejected the token/VIN — check the values",
       "tsp_empty_state": "The vehicle returned an empty state — is the token valid?"
     },

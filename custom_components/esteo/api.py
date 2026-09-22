@@ -16,6 +16,7 @@ import base64
 import hashlib
 import json
 import logging
+import re
 import secrets
 import time
 from typing import Any, Callable
@@ -248,7 +249,7 @@ class EsteoClient:
                 return await self._request(
                     method, path, json_body=json_body, params=params, _retried=True
                 )
-            if resp.status != 200:
+            if resp.status not in (200, 201):
                 raise EsteoApiError(
                     f"Esteo API {path} returned {resp.status}: {body[:300]}"
                 )
@@ -452,3 +453,141 @@ class CheryTspClient:
             {"vin": self._vin, "clientType": "1", "seq": str(int(time.time() * 1000))},
         )
         return str(payload.get("code")) == TSP_SUCCESS_CODE
+
+
+# ---------------------------------------------------------------------------
+# Headless OAuth login (phone + password, no browser)
+# ---------------------------------------------------------------------------
+from urllib.parse import urlparse, parse_qs  # noqa: E402
+
+_HYDRA_HOST = "idp.prod.esteo.ru"
+
+
+def _fix_url(url: str) -> str:
+    """Resolve relative URLs and force HTTPS for the IDP domain."""
+    if url.startswith("/"):
+        return f"https://{_HYDRA_HOST}{url}"
+    return url.replace(f"http://{_HYDRA_HOST}", f"https://{_HYDRA_HOST}")
+
+
+def format_phone(phone: str) -> str:
+    """Format a phone number into the +7 (XXX) XXX-XX-XX mask Kratos expects."""
+    digits = re.sub(r"\D", "", phone)
+    if len(digits) == 11 and digits[0] in ("7", "8"):
+        digits = digits[1:]
+    if len(digits) == 10:
+        return f"+7 ({digits[:3]}) {digits[3:6]}-{digits[6:8]}-{digits[8:10]}"
+    return phone  # fallback: return as-is
+
+
+async def login_with_credentials(
+    session: aiohttp.ClientSession,
+    phone: str,
+    password: str,
+) -> dict[str, Any]:
+    """Full programmatic OAuth login: phone + password → tokens.
+
+    No browser needed. The session MUST have a CookieJar with unsafe=True
+    (the redirect chain goes through HTTP at one point).
+    """
+    from urllib.parse import urlencode as _ue
+
+    verifier, challenge = generate_pkce_pair()
+    state = secrets.token_urlsafe(16)
+    authorize_url = build_authorize_url(state, challenge)
+    formatted_phone = format_phone(phone)
+
+    # Step 1: follow authorize URL → capture flow_id + login_challenge + cookies
+    flow_id: str | None = None
+    login_challenge: str | None = None
+    url: str = authorize_url
+    for _ in range(10):
+        async with session.get(url, allow_redirects=False) as resp:
+            if resp.status in (301, 302, 303, 307, 308):
+                url = _fix_url(resp.headers.get("Location", ""))
+                if not url:
+                    break
+                qs = parse_qs(urlparse(url).query)
+                if "login_challenge" in qs:
+                    login_challenge = qs["login_challenge"][0]
+                if "flow" in qs and "/login" in url:
+                    flow_id = qs["flow"][0]
+                continue
+            break
+
+    if not flow_id:
+        raise HydraAuthError("Could not obtain a Kratos login flow from the authorize URL")
+
+    # Step 2: extract CSRF cookie → get CSRF token from flow API
+    csrf_cookie = next(
+        (c.value for c in session.cookie_jar if c.key.startswith("csrf_token_")), None
+    )
+    csrf: str | None = None
+    async with session.get(
+        f"https://{_HYDRA_HOST}/self-service/login/flows?id={flow_id}",
+        headers={"Accept": "application/json", "X-CSRF-Token": csrf_cookie or ""},
+    ) as resp:
+        if resp.status == 200:
+            for node in (await resp.json()).get("ui", {}).get("nodes", []):
+                if node.get("attributes", {}).get("name") == "csrf_token":
+                    csrf = node["attributes"]["value"]
+                    break
+    if not csrf:
+        raise HydraAuthError("Could not extract CSRF token from the login flow")
+
+    # Step 3: POST credentials as form-encoded (browser flow → 303 redirect)
+    post_body = _ue({
+        "identifier": formatted_phone, "password": password,
+        "csrf_token": csrf, "method": "password",
+    }).encode()
+    async with session.post(
+        f"https://{_HYDRA_HOST}/self-service/login?flow={flow_id}",
+        data=post_body,
+        headers={"Accept": "text/html", "Content-Type": "application/x-www-form-urlencoded"},
+        allow_redirects=False,
+    ) as resp:
+        if resp.status == 400:
+            data = await resp.json()
+            msgs = data.get("ui", {}).get("messages", [])
+            text = msgs[0].get("text", "Login failed") if msgs else "Login failed"
+            raise HydraAuthError(f"Login rejected: {text}")
+        if resp.status not in (200, 303):
+            raise HydraAuthError(f"Kratos login returned {resp.status}")
+        # consume the body to release the connection
+        await resp.read()
+
+    # Step 4: revisit /login?login_challenge=XXX with the Kratos session cookie
+    # → Remix does the Hydra handoff → consent → OAuth code
+    if not login_challenge:
+        raise HydraAuthError("Login succeeded but login_challenge was lost")
+    code: str | None = None
+    url: str = f"https://{_HYDRA_HOST}/login?login_challenge={login_challenge}"
+    for _ in range(15):
+        if not url:
+            break
+        if "code=" in url:
+            parsed = parse_code_from_redirect(url)
+            if parsed.get("state") != state:
+                raise HydraAuthError("State mismatch in OAuth callback")
+            code = parsed["code"]
+            break
+        if "error=" in url:
+            parsed = parse_code_from_redirect(url)
+            raise HydraAuthError(f"OAuth error: {parsed.get('error')}")
+        url = _fix_url(url)
+        async with session.get(url, allow_redirects=False,
+                               headers={"Accept": "text/html"}) as resp:
+            if resp.status in (301, 302, 303, 307, 308):
+                url = resp.headers.get("Location", "")
+            else:
+                await resp.read()
+                break
+
+    if not code:
+        raise HydraAuthError("Login succeeded but no OAuth code was returned")
+    tokens = await hydra_exchange_code(session, code, verifier)
+    return {
+        "access_token": tokens["access_token"],
+        "refresh_token": tokens.get("refresh_token", ""),
+        "expires_at": token_expiry(tokens),
+    }

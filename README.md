@@ -25,22 +25,17 @@ The Chery TSP is slow — a state refresh can take 10–60 s.
 2. Restart Home Assistant.
 3. Settings → Devices & Services → Add Integration → **Esteo**.
 
-## Setup (recommended — Esteo account)
+## Setup (recommended — Esteo account, no browser needed)
 
-The Esteo OAuth server does not allow Home Assistant to complete the login automatically,
-so the flow is a one-time copy-paste:
+The integration handles the entire login flow internally — you just enter your
+Esteo phone number and password (the same credentials you use in the Esteo mobile app):
 
-1. In the integration setup choose **Esteo account**.
-2. Open the shown **authorization URL** in any browser and log in with your Esteo account
-   (the same one you use in the mobile app).
-3. After login the browser lands on `https://app.omoda.dev/auth#code=…&state=…`
-   — **the page may fail to load; that is expected.** Copy the **full URL** from the
-   browser address bar (it must contain `code=`).
-4. Paste it back into the Home Assistant form and submit.
-5. Pick your vehicle from the garage list.
+1. In the integration setup choose **Esteo account (phone + password)**.
+2. Enter your phone number in `+7XXXXXXXXXX` format (e.g. `+79991234567`) and your password.
+3. Pick your vehicle from the garage list.
 
-Home Assistant then exchanges your OAuth token for Chery TSP credentials automatically
-and keeps them refreshed.
+The integration does the full OAuth2 PKCE + Ory Kratos login programmatically —
+no browser, no copy-paste. Tokens are stored and refreshed automatically.
 
 ## Setup (advanced — direct TSP token)
 
